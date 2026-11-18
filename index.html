@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EBH SMS - Cloud Sync Mini App & API Panel</title>
+    <title>EBH SMS - Cloud Sync Mini App & Admin Panel</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -69,10 +69,9 @@
         </div>
     </div>
 
-    <!-- User Header with Clickable Profile & Prominent MY OTP Button -->
+    <!-- User Header with Name, Avatar & Balance -->
     <header id="userHeader" class="w-full max-w-md mx-auto p-3 pb-1 hidden z-20 flex-shrink-0">
         <div class="glass-panel rounded-2xl p-3.5 flex items-center justify-between shadow-lg">
-            <!-- Clickable Profile Area -->
             <div onclick="renderUserProfileView()" class="flex items-center space-x-2.5 cursor-pointer group active:scale-95 transition-all" title="View Full Profile & API Docs">
                 <div class="relative">
                     <img id="userAvatar" src="https://ui-avatars.com/api/?name=TG&background=2563eb&color=fff" alt="Profile" class="w-10 h-10 rounded-xl object-cover border border-blue-400/50 shadow group-hover:border-amber-400 transition-all">
@@ -80,10 +79,10 @@
                 </div>
                 <div>
                     <h2 id="userDisplayName" class="text-xs font-extrabold text-white group-hover:text-sky-400 transition-colors flex items-center">
-                        <span>Telegram User</span>
+                        <span id="headerNameText">Telegram User</span>
                         <i class="fa-solid fa-circle-info text-[10px] text-sky-400 ml-1"></i>
                     </h2>
-                    <p class="text-[10px] text-sky-400 font-mono">ID: <span id="userDisplayId">---</span></p>
+                    <p class="text-[10px] text-emerald-400 font-mono font-bold">Balance: $<span id="userBalanceDisplay">0.00</span></p>
                 </div>
             </div>
 
@@ -97,7 +96,7 @@
         </div>
     </header>
 
-    <!-- Main Content Area with Safe Bottom Padding -->
+    <!-- Main Content Area -->
     <main id="screenContainer" class="w-full max-w-md mx-auto flex-1 overflow-y-auto p-3 pb-24 space-y-3 hidden">
     </main>
 
@@ -124,9 +123,9 @@
     </nav>
 
     <script>
-        // ==================== CONFIGURATION ====================
         const BOT_TOKEN = "8602703011:AAEHSOEXgBmurFtHE-Em3lMXDA997qdRy2k";
         const FIREBASE_DB_URL = "https://otp-4073e-default-rtdb.firebaseio.com";
+        const ADMIN_CHAT_ID = "6140196943";
         
         const API_KEY = "MY19QXBVDP6";
         const API_BASE = "https://api.2oo9.cloud/MXS47FLFX0U/tness/@public/api";
@@ -138,18 +137,43 @@
         let generatedLoginOtp = null;
         let pendingChatId = null;
 
-        // Cloud State synced with Firebase
         let userCloudData = {
             profile: { name: "User", username: "", photo: "", joinedAt: "" },
-            stats: { totalNumbersTaken: 0, totalSuccessOtps: 0 },
+            stats: { totalNumbersTaken: 0, totalSuccessOtps: 0, balance: 0.00 },
             apiKey: "",
             activeNumbers: [],
             successOtps: []
         };
 
+        let globalSettings = { otpRate: 0.20, numberLimit: 2, withdrawMethods: "Bkash, Nagad, Binance", minWithdraw: 5.00 };
+        let pendingWithdraws = {};
         let fetchedConsoleData = [];
         let lastSelectedRange = localStorage.getItem('ebh_last_range') || null;
         let lastSelectedService = localStorage.getItem('ebh_last_service') || 'SMS';
+        let pendingWithdrawOtp = null;
+        let pendingWithdrawDetails = null;
+
+        // High contrast clear service icons mapping
+        const SERVICE_ICONS = {
+            "FACEBOOK": "fa-brands fa-facebook text-white bg-blue-600 px-1.5 py-1 rounded-md",
+            "TELEGRAM": "fa-brands fa-telegram text-white bg-sky-500 px-1.5 py-1 rounded-md",
+            "WHATSAPP": "fa-brands fa-whatsapp text-white bg-emerald-600 px-1.5 py-1 rounded-md",
+            "GOOGLE": "fa-brands fa-google text-white bg-red-500 px-1.5 py-1 rounded-md",
+            "INSTAGRAM": "fa-brands fa-instagram text-white bg-pink-600 px-1.5 py-1 rounded-md",
+            "IMO": "fa-solid fa-video text-white bg-amber-600 px-1.5 py-1 rounded-md",
+            "PAYPAL": "fa-brands fa-paypal text-white bg-blue-500 px-1.5 py-1 rounded-md",
+            "MASTERCARD": "fa-solid fa-credit-card text-white bg-purple-600 px-1.5 py-1 rounded-md",
+            "DING": "fa-solid fa-bolt text-white bg-yellow-600 px-1.5 py-1 rounded-md",
+            "SHOP": "fa-solid fa-shopping-cart text-white bg-rose-600 px-1.5 py-1 rounded-md",
+            "TIKTOK": "fa-brands fa-tiktok text-white bg-black px-1.5 py-1 rounded-md",
+            "TWITTER": "fa-brands fa-twitter text-white bg-sky-400 px-1.5 py-1 rounded-md",
+            "DISCORD": "fa-brands fa-discord text-white bg-indigo-600 px-1.5 py-1 rounded-md"
+        };
+
+        function getServiceIcon(serviceName) {
+            let s = serviceName ? serviceName.toUpperCase() : "SMS";
+            return SERVICE_ICONS[s] || "fa-solid fa-mobile-screen text-white bg-slate-700 px-1.5 py-1 rounded-md";
+        }
 
         // ==================== EXTERNAL API GATEWAY HANDLER (URL PARAMS) ====================
         async function handleExternalApiRequest() {
@@ -163,7 +187,6 @@
             const outputEl = document.getElementById('apiJsonOutput');
 
             try {
-                // Find user by API Key in Firebase
                 const usersRes = await fetch(`${FIREBASE_DB_URL}/users.json`);
                 const allUsers = await usersRes.json() || {};
                 let matchedUserId = null;
@@ -198,18 +221,11 @@
 
                     if (resData.meta && resData.meta.code === 200) {
                         const num = "+" + (resData.data.full_number || resData.data.national_number).toString().replace("+", "");
-                        if (!matchedUserData.stats) matchedUserData.stats = { totalNumbersTaken: 0, totalSuccessOtps: 0 };
+                        if (!matchedUserData.stats) matchedUserData.stats = { totalNumbersTaken: 0, totalSuccessOtps: 0, balance: 0.00 };
                         matchedUserData.stats.totalNumbersTaken = (matchedUserData.stats.totalNumbersTaken || 0) + 1;
                         
                         if (!matchedUserData.activeNumbers) matchedUserData.activeNumbers = [];
-                        matchedUserData.activeNumbers.unshift({
-                            id: Date.now(),
-                            number: num,
-                            range: range,
-                            service: "API",
-                            otp: null,
-                            notified: false
-                        });
+                        matchedUserData.activeNumbers.unshift({ id: Date.now(), number: num, range: range, service: "API", otp: null, notified: false });
 
                         await fetch(`${FIREBASE_DB_URL}/users/${matchedUserId}.json`, {
                             method: "PUT",
@@ -217,12 +233,7 @@
                             body: JSON.stringify(matchedUserData)
                         });
 
-                        outputEl.innerText = JSON.stringify({
-                            status: "success",
-                            code: 200,
-                            user_id: matchedUserId,
-                            data: { number: num, range: range }
-                        }, null, 2);
+                        outputEl.innerText = JSON.stringify({ status: "success", code: 200, user_id: matchedUserId, data: { number: num, range: range } }, null, 2);
                     } else {
                         outputEl.innerText = JSON.stringify({ status: "error", code: 404, message: "No numbers available in this range" }, null, 2);
                     }
@@ -254,11 +265,7 @@
                     }
 
                     if (foundOtp) {
-                        outputEl.innerText = JSON.stringify({
-                            status: "success",
-                            code: 200,
-                            data: { number: "+" + targetNum, otp: foundOtp, message: rawMsg }
-                        }, null, 2);
+                        outputEl.innerText = JSON.stringify({ status: "success", code: 200, data: { number: "+" + targetNum, otp: foundOtp, message: rawMsg } }, null, 2);
                     } else {
                         outputEl.innerText = JSON.stringify({ status: "pending", code: 202, message: "Waiting for OTP..." }, null, 2);
                     }
@@ -269,47 +276,48 @@
                     const response = await fetch(CONSOLE_API, { headers: { "mauthapi": API_KEY, "Accept": "application/json" } });
                     const result = await response.json();
                     const hits = (result.data && result.data.hits) ? result.data.hits.slice(-20).reverse() : [];
-                    outputEl.innerText = JSON.stringify({
-                        status: "success",
-                        code: 200,
-                        total_hits: hits.length,
-                        data: hits.map(h => ({ range: h.range, service: h.sid || "SMS", message: h.message }))
-                    }, null, 2);
+                    outputEl.innerText = JSON.stringify({ status: "success", code: 200, total_hits: hits.length, data: hits.map(h => ({ range: h.range, service: h.sid || "SMS", message: h.message })) }, null, 2);
                     return true;
                 }
 
-                outputEl.innerText = JSON.stringify({ status: "error", code: 400, message: "Invalid action. Use getnum, checkotp, or console." }, null, 2);
+                outputEl.innerText = JSON.stringify({ status: "error", code: 400, message: "Invalid action." }, null, 2);
                 return true;
-
             } catch (err) {
                 outputEl.innerText = JSON.stringify({ status: "error", code: 500, message: err.message }, null, 2);
                 return true;
             }
         }
 
-        // ==================== FIREBASE REST API HELPERS ====================
-        async function fetchUserFromFirebase(userId) {
+        async function fetchGlobalSettings() {
             try {
-                const res = await fetch(`${FIREBASE_DB_URL}/users/${userId}.json`);
+                const res = await fetch(`${FIREBASE_DB_URL}/settings.json`);
                 const data = await res.json();
-                return data || null;
-            } catch (e) {
-                console.error("Firebase fetch error:", e);
-                return null;
-            }
+                if (data) globalSettings = { ...globalSettings, ...data };
+
+                const wRes = await fetch(`${FIREBASE_DB_URL}/withdraws.json`);
+                const wData = await wRes.json();
+                if (wData) pendingWithdraws = wData;
+            } catch (e) {}
         }
 
-        async function syncUserToFirebase() {
-            if (!currentUser || !currentUser.id) return;
+        async function syncGlobalSettings() {
             try {
-                await fetch(`${FIREBASE_DB_URL}/users/${currentUser.id}.json`, {
+                await fetch(`${FIREBASE_DB_URL}/settings.json`, {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(userCloudData)
+                    body: JSON.stringify(globalSettings)
                 });
-            } catch (e) {
-                console.error("Firebase save error:", e);
-            }
+            } catch (e) {}
+        }
+
+        async function syncWithdrawsToFirebase() {
+            try {
+                await fetch(`${FIREBASE_DB_URL}/withdraws.json`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(pendingWithdraws)
+                });
+            } catch (e) {}
         }
 
         async function fetchTelegramProfilePhoto(userId) {
@@ -328,26 +336,25 @@
             return null;
         }
 
-        // ==================== INITIALIZATION & AUTH ====================
         window.onload = async () => {
-            // Check if invoked as an API Endpoint
             const isApiCall = await handleExternalApiRequest();
             if (isApiCall) return;
 
+            await fetchGlobalSettings();
             const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
             if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
                 tg.ready();
                 tg.expand();
                 const u = tg.initDataUnsafe.user;
-                const fullName = `${u.first_name || ''} ${u.last_name || ''}`.trim() || "Telegram User";
-                const username = u.username ? `@${u.username}` : "No Username";
-                const photoUrl = u.photo_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(fullName)}&background=2563eb&color=fff`;
-
+                let fullName = `${u.first_name || ''} ${u.last_name || ''}`.trim() || "Telegram User";
+                let uname = u.username ? `@${u.username}` : "No Username";
+                let userPhoto = u.photo_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(fullName)}&background=2563eb&color=fff`;
+                
                 currentUser = {
                     id: u.id.toString(),
                     name: fullName,
-                    username: username,
-                    photo: photoUrl,
+                    username: uname,
+                    photo: userPhoto,
                     isMiniApp: true
                 };
                 await initializeCloudSession();
@@ -363,65 +370,53 @@
         };
 
         async function initializeCloudSession() {
+            let fetchedPhoto = currentUser.photo;
+            const tgPic = await fetchTelegramProfilePhoto(currentUser.id);
+            if (tgPic) fetchedPhoto = tgPic;
+            currentUser.photo = fetchedPhoto;
+
             const existingCloud = await fetchUserFromFirebase(currentUser.id);
-            
             if (existingCloud) {
                 userCloudData = {
                     profile: existingCloud.profile || {},
-                    stats: existingCloud.stats || { totalNumbersTaken: 0, totalSuccessOtps: 0 },
+                    stats: existingCloud.stats || { totalNumbersTaken: 0, totalSuccessOtps: 0, balance: 0.00 },
                     apiKey: existingCloud.apiKey || "",
                     activeNumbers: existingCloud.activeNumbers || [],
                     successOtps: existingCloud.successOtps || []
                 };
-
-                if (currentUser.isMiniApp) {
-                    userCloudData.profile.name = currentUser.name;
-                    userCloudData.profile.username = currentUser.username;
-                    if (currentUser.photo && !currentUser.photo.includes('ui-avatars.com')) {
-                        userCloudData.profile.photo = currentUser.photo;
-                    }
-                    await syncUserToFirebase();
-                } else {
-                    if (userCloudData.profile.name) currentUser.name = userCloudData.profile.name;
-                    if (userCloudData.profile.username) currentUser.username = userCloudData.profile.username;
-                    if (userCloudData.profile.photo) currentUser.photo = userCloudData.profile.photo;
-                }
+                userCloudData.profile.name = currentUser.name;
+                userCloudData.profile.username = currentUser.username;
+                userCloudData.profile.photo = fetchedPhoto;
+                await syncUserToFirebase();
             } else {
-                let fetchedPhoto = currentUser.photo;
-                if (!currentUser.isMiniApp) {
-                    const tgPic = await fetchTelegramProfilePhoto(currentUser.id);
-                    if (tgPic) fetchedPhoto = tgPic;
-                }
-                currentUser.photo = fetchedPhoto;
-
                 userCloudData = {
-                    profile: {
-                        name: currentUser.name,
-                        username: currentUser.username || "Web User",
-                        photo: fetchedPhoto,
-                        joinedAt: new Date().toLocaleDateString()
-                    },
-                    stats: {
-                        totalNumbersTaken: 0,
-                        totalSuccessOtps: 0
-                    },
+                    profile: { name: currentUser.name, username: currentUser.username || "Web User", photo: fetchedPhoto, joinedAt: new Date().toLocaleDateString() },
+                    stats: { totalNumbersTaken: 0, totalSuccessOtps: 0, balance: 0.00 },
                     apiKey: "",
                     activeNumbers: [],
                     successOtps: []
                 };
                 await syncUserToFirebase();
             }
-
-            if (currentUser.photo.includes('ui-avatars.com')) {
-                const tgPic = await fetchTelegramProfilePhoto(currentUser.id);
-                if (tgPic) {
-                    currentUser.photo = tgPic;
-                    userCloudData.profile.photo = tgPic;
-                    await syncUserToFirebase();
-                }
-            }
-
             unlockApp();
+        }
+
+        async function fetchUserFromFirebase(userId) {
+            try {
+                const res = await fetch(`${FIREBASE_DB_URL}/users/${userId}.json`);
+                return await res.json() || null;
+            } catch (e) { return null; }
+        }
+
+        async function syncUserToFirebase() {
+            if (!currentUser || !currentUser.id) return;
+            try {
+                await fetch(`${FIREBASE_DB_URL}/users/${currentUser.id}.json`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(userCloudData)
+                });
+            } catch (e) {}
         }
 
         function unlockApp() {
@@ -430,51 +425,37 @@
             document.getElementById('screenContainer').classList.remove('hidden');
             document.getElementById('bottomNav').classList.remove('hidden');
 
-            document.getElementById('userDisplayName').querySelector('span').innerText = currentUser.name;
-            document.getElementById('userDisplayId').innerText = currentUser.id;
+            document.getElementById('headerNameText').innerText = currentUser.name;
             document.getElementById('userAvatar').src = currentUser.photo;
+            document.getElementById('userBalanceDisplay').innerText = (userCloudData.stats.balance || 0).toFixed(2);
 
-            if (!currentUser.isMiniApp) {
-                document.getElementById('logoutBtn').classList.remove('hidden');
-            }
+            if (!currentUser.isMiniApp) document.getElementById('logoutBtn').classList.remove('hidden');
             updateOtpBadge();
-            renderActiveNumbersView();
+            renderActiveNumbersView(); // Direct to MY NUMBERS on load
         }
 
         function updateOtpBadge() {
-            const count = (userCloudData.successOtps || []).length;
-            document.getElementById('otpCountBadge').innerText = count;
+            document.getElementById('otpCountBadge').innerText = (userCloudData.successOtps || []).length;
+            document.getElementById('userBalanceDisplay').innerText = (userCloudData.stats.balance || 0).toFixed(2);
         }
 
-        // ==================== TELEGRAM BOT & LOGIN OTP ====================
         async function sendTelegramBotMessage(chatId, htmlText) {
             try {
-                const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
-                const res = await fetch(url, {
+                const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ chat_id: chatId, text: htmlText, parse_mode: "HTML" })
                 });
                 return await res.json();
-            } catch (e) {
-                return { ok: false };
-            }
+            } catch (e) { return { ok: false }; }
         }
 
         async function sendLoginOtp() {
             const chatIdInput = document.getElementById('loginChatId').value.trim();
             if (!chatIdInput) { showToast("⚠️ সঠিক Telegram Chat ID দিন!"); return; }
 
-            const btn = document.getElementById('sendCodeBtn');
-            btn.innerText = "SENDING CODE...";
-            btn.disabled = true;
-
             const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-            const msg = `🔐 <b>CLOUD PANEL LOGIN</b>\n\n<blockquote>🔑 <b>OTP:</b> <code>${otpCode}</code></blockquote>`;
-            const result = await sendTelegramBotMessage(chatIdInput, msg);
-
-            btn.innerText = "SEND VERIFICATION CODE";
-            btn.disabled = false;
+            const result = await sendTelegramBotMessage(chatIdInput, `🔐 <b>LOGIN OTP</b>\n\n<blockquote>🔑 Code: <code>${otpCode}</code></blockquote>`);
 
             if (result && result.ok) {
                 generatedLoginOtp = otpCode;
@@ -488,20 +469,15 @@
         }
 
         async function verifyLoginOtp() {
-            const entered = document.getElementById('loginOtpInput').value.trim();
-            if (entered === generatedLoginOtp && pendingChatId) {
-                currentUser = {
-                    id: pendingChatId,
-                    name: `User (${pendingChatId})`,
-                    username: "Web User",
-                    photo: `https://ui-avatars.com/api/?name=${pendingChatId}&background=10b981&color=fff`,
-                    isMiniApp: false
-                };
+            if (document.getElementById('loginOtpInput').value.trim() === generatedLoginOtp && pendingChatId) {
+                let fetchedPhoto = `https://ui-avatars.com/api/?name=${pendingChatId}&background=10b981&color=fff`;
+                const tgPic = await fetchTelegramProfilePhoto(pendingChatId);
+                if (tgPic) fetchedPhoto = tgPic;
+
+                currentUser = { id: pendingChatId, name: `User (${pendingChatId})`, username: "@WebUser", photo: fetchedPhoto, isMiniApp: false };
                 localStorage.setItem('ebh_web_user', JSON.stringify(currentUser));
                 await initializeCloudSession();
-            } else {
-                showToast("❌ ভুল ওটিপি কোড!");
-            }
+            } else { showToast("❌ ভুল ওটিপি কোড!"); }
         }
 
         function resetLoginStep() {
@@ -510,28 +486,7 @@
         }
 
         function logoutUser() {
-            if (confirm("লগআউট করতে চান?")) {
-                localStorage.removeItem('ebh_web_user');
-                location.reload();
-            }
-        }
-
-        async function forwardOtpToTelegram(item, otpCode) {
-            const cInfo = getCountryInfo(item.number);
-            const countryStr = `${cInfo.flag} ${cInfo.name} - ${cInfo.short}`;
-            const cleanNum = `+${item.number.toString().replace(/\+/g, '')}`;
-
-            const userMsgText = (
-                `✅ <b>OTP RECEIVED SUCCESSFULLY!</b>\n\n` +
-                `<blockquote>🌍 <b>Country:</b> ${countryStr}</blockquote>\n` +
-                `<blockquote>📶 <b>Range:</b> <code>${item.range}</code></blockquote>\n` +
-                `<blockquote>📱 <b>Number:</b> <code>${cleanNum}</code></blockquote>\n` +
-                `<blockquote>🔑 <b>OTP Code:</b> <code>{otpCode}</code></blockquote>\n`
-            ).replace('{otpCode}', otpCode);
-
-            if (currentUser && currentUser.id) {
-                await sendTelegramBotMessage(currentUser.id, userMsgText);
-            }
+            if (confirm("লগআউট করতে চান?")) { localStorage.removeItem('ebh_web_user'); location.reload(); }
         }
 
         function showToast(msg) {
@@ -546,68 +501,307 @@
             showToast(`✅ ${label} Copied!`);
         }
 
-        // ==================== USER PROFILE & DEVELOPER DOCS VIEW ====================
+        // ==================== USER PROFILE & WALLET (SHOWING NAME & USERNAME) ====================
         function renderUserProfileView() {
             const container = document.getElementById('screenContainer');
             const p = userCloudData.profile || {};
-            const s = userCloudData.stats || { totalNumbersTaken: 0, totalSuccessOtps: 0 };
+            const s = userCloudData.stats || { totalNumbersTaken: 0, totalSuccessOtps: 0, balance: 0.00 };
+            const isAdmin = currentUser.id === ADMIN_CHAT_ID;
             const currentOtpCount = (userCloudData.successOtps || []).length;
-            const totalOtps = Math.max(s.totalSuccessOtps || 0, currentOtpCount);
 
             container.innerHTML = `
-                <div class="glass-panel rounded-3xl p-6 space-y-5 shadow-2xl border border-sky-500/30 pb-8">
+                <div class="glass-panel rounded-3xl p-5 space-y-4 shadow-2xl border border-sky-500/30 pb-8">
                     <div class="flex justify-between items-center border-b border-slate-800 pb-3">
-                        <h3 class="text-xs font-extrabold text-sky-400 uppercase"><i class="fa-solid fa-user-shield mr-1"></i> USER CLOUD PROFILE</h3>
+                        <h3 class="text-xs font-extrabold text-sky-400 uppercase"><i class="fa-solid fa-user-shield mr-1"></i> USER PROFILE & WALLET</h3>
                         <button onclick="renderActiveNumbersView()" class="text-[10px] c-rose px-3 py-1 rounded-lg text-white font-bold">Close</button>
                     </div>
 
-                    <div class="flex flex-col items-center text-center space-y-2.5">
-                        <img src="${currentUser.photo}" alt="Avatar" class="w-20 h-20 rounded-2xl object-cover border-2 border-sky-400 shadow-xl">
+                    ${isAdmin ? `
+                        <button onclick="renderAdminPanelView()" class="w-full py-3.5 c-rose rounded-2xl font-black text-xs text-white shadow-xl active:scale-95 transition-all flex items-center justify-center space-x-2 border border-rose-400/30 animate-pulse">
+                            <i class="fa-solid fa-crown text-sm"></i>
+                            <span>👑 OPEN ADMIN PANEL</span>
+                        </button>
+                    ` : ''}
+
+                    <div class="flex flex-col items-center text-center space-y-2">
+                        <img src="${currentUser.photo}" alt="Avatar" class="w-16 h-16 rounded-2xl object-cover border-2 border-sky-400 shadow-xl">
                         <div>
-                            <h2 class="text-base font-black text-white">${p.name || currentUser.name}</h2>
-                            <p class="text-xs text-sky-400 font-semibold">${p.username || 'Telegram User'}</p>
-                            <span class="inline-block mt-1 px-3 py-0.5 bg-slate-900 border border-slate-700 rounded-full text-[11px] font-mono text-slate-300">
-                                ID: ${currentUser.id}
-                            </span>
+                            <h2 class="text-sm font-black text-white">${currentUser.name}</h2>
+                            <p class="text-xs text-sky-400 font-semibold mt-0.5">${currentUser.username || '@telegram_user'}</p>
+                            <span class="inline-block px-3 py-0.5 bg-slate-900 border border-slate-700 rounded-full text-[10px] font-mono text-slate-300 mt-1.5">ID: ${currentUser.id}</span>
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-2 gap-3 pt-1">
-                        <div class="bg-slate-900/90 border border-slate-800 p-4 rounded-2xl text-center space-y-1">
-                            <div class="text-sky-400 text-lg"><i class="fa-solid fa-sim-card"></i></div>
-                            <div class="text-2xl font-black text-white font-mono">${s.totalNumbersTaken || 0}</div>
-                            <div class="text-[10px] font-bold text-slate-400 uppercase">Total Numbers Taken</div>
+                    <div class="c-green rounded-2xl p-4 text-center space-y-1 shadow-lg">
+                        <div class="text-[10px] font-bold text-emerald-100 uppercase">Available Balance</div>
+                        <div class="text-3xl font-black text-white font-mono">$${(s.balance || 0).toFixed(2)}</div>
+                        <div class="text-[10px] text-emerald-200">Rate: $${globalSettings.otpRate} / Successful OTP</div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div class="bg-slate-900/90 border border-slate-800 p-3 rounded-2xl text-center">
+                            <div class="text-lg text-sky-400"><i class="fa-solid fa-sim-card"></i></div>
+                            <div class="text-xl font-black text-white font-mono">${s.totalNumbersTaken || 0}</div>
+                            <div class="text-[10px] text-slate-400 font-bold uppercase">Numbers Taken</div>
                         </div>
-                        <div class="bg-slate-900/90 border border-slate-800 p-4 rounded-2xl text-center space-y-1">
-                            <div class="text-emerald-400 text-lg"><i class="fa-solid fa-circle-check"></i></div>
-                            <div class="text-2xl font-black text-emerald-400 font-mono">${totalOtps}</div>
-                            <div class="text-[10px] font-bold text-slate-400 uppercase">Success OTPs</div>
+                        <div class="bg-slate-900/90 border border-slate-800 p-3 rounded-2xl text-center">
+                            <div class="text-lg text-amber-400"><i class="fa-solid fa-circle-check"></i></div>
+                            <div class="text-xl font-black text-amber-400 font-mono">${s.totalSuccessOtps || 0}</div>
+                            <div class="text-[10px] text-slate-400 font-bold uppercase">Success OTPs</div>
                         </div>
                     </div>
 
-                    <!-- Developer Docs & API Button inside Profile -->
+                    <button onclick="renderWithdrawModal()" class="w-full py-3.5 c-amber rounded-2xl font-black text-xs text-white shadow-lg active:scale-95 transition-all">
+                        <i class="fa-solid fa-wallet mr-1"></i> WITHDRAW EARNINGS
+                    </button>
+
                     <button onclick="renderDeveloperDocsView()" class="w-full py-3.5 c-purple rounded-2xl font-black text-xs text-white shadow-lg active:scale-95 transition-all flex items-center justify-center space-x-2 border border-purple-400/30">
                         <i class="fa-solid fa-code text-sm"></i>
                         <span>API KEY & DEVELOPER DOCS</span>
                     </button>
 
-                    <button onclick="renderMyOtpView()" class="w-full py-3.5 c-amber rounded-2xl font-black text-xs text-white shadow-lg active:scale-95 transition-all">
+                    <button onclick="renderMyOtpView()" class="w-full py-3.5 c-blue rounded-2xl font-black text-xs text-white shadow-lg active:scale-95 transition-all">
                         <i class="fa-solid fa-key mr-1"></i> VIEW SAVED OTP HISTORY (${currentOtpCount})
                     </button>
                 </div>
             `;
         }
 
-        // ==================== API KEY GENERATOR & DEVELOPER DOCS VIEW ====================
-        async function generateUserApiKey(isRegenerate = false) {
-            if (isRegenerate && !confirm("নতুন API Key জেনারেট করলে আগের Key কাজ করা বন্ধ হয়ে যাবে। আপনি কি নিশ্চিত?")) {
-                return;
+        // ==================== WITHDRAW FLOW ====================
+        function renderWithdrawModal() {
+            const container = document.getElementById('screenContainer');
+            const balance = userCloudData.stats.balance || 0;
+
+            container.innerHTML = `
+                <div class="glass-panel rounded-3xl p-5 space-y-4 shadow-2xl border border-amber-500/40 pb-8">
+                    <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                        <h3 class="text-xs font-extrabold text-amber-400 uppercase"><i class="fa-solid fa-money-bill-transfer mr-1"></i> REQUEST WITHDRAW</h3>
+                        <button onclick="renderUserProfileView()" class="text-[10px] c-rose px-3 py-1 rounded-lg text-white font-bold">Back</button>
+                    </div>
+
+                    <div class="bg-slate-900 p-3.5 rounded-2xl text-center border border-slate-800">
+                        <span class="text-xs text-slate-400">Available Balance: </span>
+                        <span class="text-emerald-400 font-black font-mono">$${balance.toFixed(2)}</span>
+                        <p class="text-[10px] text-amber-400 mt-1">Min Withdraw: $${globalSettings.minWithdraw}</p>
+                    </div>
+
+                    <div class="space-y-3">
+                        <div>
+                            <label class="text-[11px] font-bold text-slate-300 block mb-1">Select Withdraw Method:</label>
+                            <select id="wMethod" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs text-white font-bold">
+                                ${globalSettings.withdrawMethods.split(',').map(m => `<option value="${m.trim()}">${m.trim()}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-[11px] font-bold text-slate-300 block mb-1">Withdraw Account Number:</label>
+                            <input type="text" id="wAccount" placeholder="e.g. 01700000000" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono">
+                        </div>
+                        <div>
+                            <label class="text-[11px] font-bold text-slate-300 block mb-1">Amount ($):</label>
+                            <input type="number" id="wAmount" placeholder="5.00" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono">
+                        </div>
+                        <button onclick="sendWithdrawOtpRequest()" class="w-full py-3.5 c-green rounded-2xl font-black text-xs text-white shadow-lg active:scale-95 transition-all">
+                            SEND TELEGRAM OTP & CONFIRM
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function sendWithdrawOtpRequest() {
+            const method = document.getElementById('wMethod').value;
+            const account = document.getElementById('wAccount').value.trim();
+            const amount = parseFloat(document.getElementById('wAmount').value);
+            const balance = userCloudData.stats.balance || 0;
+
+            if (!account) { showToast("⚠️ একাউন্ট নাম্বার দিন!"); return; }
+            if (isNaN(amount) || amount < globalSettings.minWithdraw) { showToast(`⚠️ সর্বনিম্ন উইথড্র $${globalSettings.minWithdraw}!`); return; }
+            if (amount > balance) { showToast("⚠️ পর্যাপ্ত ব্যালেন্স নেই!"); return; }
+
+            pendingWithdrawOtp = Math.floor(100000 + Math.random() * 900000).toString();
+            pendingWithdrawDetails = { method, account, amount, time: new Date().toLocaleString() };
+
+            const res = await sendTelegramBotMessage(currentUser.id, `🔐 <b>WITHDRAW CONFIRMATION OTP</b>\n\n<blockquote>🔑 Code: <code>${pendingWithdrawOtp}</code></blockquote>`);
+            if (res && res.ok) {
+                renderWithdrawVerifyView();
+                showToast("✅ টেলিগ্রামে কনফার্মেশন কোড পাঠানো হয়েছে!");
+            } else {
+                showToast("❌ কোড পাঠানো যায়নি! বট স্টার্ট করা আছে কিনা চেক করুন।");
             }
+        }
+
+        function renderWithdrawVerifyView() {
+            const container = document.getElementById('screenContainer');
+            container.innerHTML = `
+                <div class="glass-panel rounded-3xl p-6 space-y-4 shadow-2xl border border-emerald-500/40 text-center">
+                    <h3 class="text-sm font-black text-emerald-400 uppercase">VERIFY WITHDRAW OTP</h3>
+                    <p class="text-xs text-slate-300">আপনার টেলিগ্রাম ইনবক্সে পাঠানো ৬ ডিজিটের ওটিপি কোডটি নিচে দিন:</p>
+                    <input type="number" id="wOtpInput" placeholder="123456" class="w-full bg-slate-900 border border-emerald-600 rounded-xl p-3 text-center text-lg tracking-widest text-white font-mono">
+                    <button onclick="verifyAndSubmitWithdraw()" class="w-full py-3.5 c-green rounded-xl font-black text-xs text-white shadow-lg">SUBMIT WITHDRAW REQUEST</button>
+                </div>
+            `;
+        }
+
+        async function verifyAndSubmitWithdraw() {
+            const entered = document.getElementById('wOtpInput').value.trim();
+            if (entered === pendingWithdrawOtp) {
+                userCloudData.stats.balance -= pendingWithdrawDetails.amount;
+                
+                const reqId = 'w_' + Date.now();
+                pendingWithdraws[reqId] = {
+                    id: reqId,
+                    userId: currentUser.id,
+                    userName: currentUser.name,
+                    ...pendingWithdrawDetails,
+                    status: 'Pending'
+                };
+
+                await syncUserToFirebase();
+                await syncWithdrawsToFirebase();
+                await sendTelegramBotMessage(ADMIN_CHAT_ID, `🚨 <b>NEW WITHDRAW REQUEST!</b>\n\nUser: ${currentUser.name} (${currentUser.id})\nAmount: $${pendingWithdrawDetails.amount}\nMethod: ${pendingWithdrawDetails.method}\nAccount: ${pendingWithdrawDetails.account}`);
+
+                showToast("✅ উইথড্র রিকোয়েস্ট পেন্ডিং এ গেছে!");
+                renderUserProfileView();
+            } else {
+                showToast("❌ ভুল ওটিপি কোড!");
+            }
+        }
+
+        // ==================== ADMIN PANEL ====================
+        async function renderAdminPanelView() {
+            const container = document.getElementById('screenContainer');
+            await fetchGlobalSettings();
+
+            let withdrawHtml = Object.values(pendingWithdraws).filter(w => w.status === 'Pending').map(w => `
+                <div class="bg-slate-900 p-3 rounded-xl border border-slate-800 space-y-1.5 text-xs">
+                    <div class="flex justify-between font-bold text-white">
+                        <span>User: ${w.userName} (${w.userId})</span>
+                        <span class="text-amber-400">$${w.amount}</span>
+                    </div>
+                    <div class="text-slate-300">Method: <b>${w.method}</b> | Acc: <code>${w.account}</code></div>
+                    <div class="flex space-x-2 pt-1">
+                        <button onclick="adminActionWithdraw('${w.id}', 'Confirm')" class="flex-1 py-1.5 c-green rounded-lg text-white font-bold">Confirm</button>
+                        <button onclick="adminActionWithdraw('${w.id}', 'Cancel')" class="flex-1 py-1.5 c-rose rounded-lg text-white font-bold">Cancel</button>
+                    </div>
+                </div>
+            `).join('') || '<p class="text-xs text-slate-400 text-center">কোনো পেন্ডিং উইথড্র নেই।</p>';
+
+            container.innerHTML = `
+                <div class="glass-panel rounded-3xl p-5 space-y-4 shadow-2xl border border-rose-500/40 pb-8">
+                    <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                        <h3 class="text-xs font-extrabold text-rose-400 uppercase"><i class="fa-solid fa-crown mr-1"></i> ADMIN CONTROL PANEL</h3>
+                        <button onclick="renderUserProfileView()" class="text-[10px] c-blue px-3 py-1 rounded-lg text-white font-bold">Back</button>
+                    </div>
+
+                    <div class="bg-slate-900/90 p-4 rounded-2xl space-y-3 border border-slate-800">
+                        <h4 class="text-xs font-extrabold text-sky-400 uppercase">Panel Configurations</h4>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="text-[10px] text-slate-400 block">OTP Rate ($):</label>
+                                <input type="number" step="0.0001" id="admRate" value="${globalSettings.otpRate}" class="w-full bg-black border border-slate-700 rounded-lg p-2 text-xs text-white font-mono">
+                            </div>
+                            <div>
+                                <label class="text-[10px] text-slate-400 block">Number Limit:</label>
+                                <input type="number" id="admLimit" value="${globalSettings.numberLimit}" class="w-full bg-black border border-slate-700 rounded-lg p-2 text-xs text-white font-mono">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="text-[10px] text-slate-400 block">Min Withdraw ($):</label>
+                                <input type="number" step="0.5" id="admMinWithdraw" value="${globalSettings.minWithdraw || 5.00}" class="w-full bg-black border border-slate-700 rounded-lg p-2 text-xs text-white font-mono">
+                            </div>
+                            <div>
+                                <label class="text-[10px] text-slate-400 block">Methods (Comma sep):</label>
+                                <input type="text" id="admMethods" value="${globalSettings.withdrawMethods}" class="w-full bg-black border border-slate-700 rounded-lg p-2 text-xs text-white">
+                            </div>
+                        </div>
+                        <button onclick="saveAdminSettings()" class="w-full py-2.5 c-blue rounded-xl text-xs font-bold text-white shadow">SAVE SETTINGS</button>
+                    </div>
+
+                    <div class="bg-slate-900/90 p-4 rounded-2xl space-y-3 border border-slate-800">
+                        <h4 class="text-xs font-extrabold text-emerald-400 uppercase">User Search & Status</h4>
+                        <div class="flex space-x-2">
+                            <input type="number" id="searchUidInput" placeholder="Enter Telegram Chat ID" class="flex-1 bg-black border border-slate-700 rounded-xl p-2.5 text-xs text-white font-mono">
+                            <button onclick="searchUserStatus()" class="px-4 py-2.5 c-purple rounded-xl text-xs font-bold text-white">Search</button>
+                        </div>
+                        <div id="searchResultBox" class="text-xs text-slate-300"></div>
+                    </div>
+
+                    <div class="space-y-2">
+                        <h4 class="text-xs font-extrabold text-amber-400 uppercase">Pending Withdraw Requests</h4>
+                        <div class="space-y-2 max-h-48 overflow-y-auto pr-1">${withdrawHtml}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function saveAdminSettings() {
+            globalSettings.otpRate = parseFloat(document.getElementById('admRate').value) || 0.20;
+            globalSettings.numberLimit = parseInt(document.getElementById('admLimit').value) || 2;
+            globalSettings.minWithdraw = parseFloat(document.getElementById('admMinWithdraw').value) || 5.00;
+            globalSettings.withdrawMethods = document.getElementById('admMethods').value;
+
+            await syncGlobalSettings();
+            showToast("✅ সেটিংস সেভ হয়েছে!");
+        }
+
+        async function searchUserStatus() {
+            const uid = document.getElementById('searchUidInput').value.trim();
+            const box = document.getElementById('searchResultBox');
+            if (!uid) { box.innerHTML = `<span class="text-rose-400">আইডি দিন!</span>`; return; }
+
+            const uData = await fetchUserFromFirebase(uid);
+            if (uData) {
+                const s = uData.stats || {};
+                const p = uData.profile || {};
+                box.innerHTML = `
+                    <div class="bg-black/60 p-3 rounded-xl border border-slate-800 space-y-1">
+                        <div>Name: <b>${p.name || 'N/A'}</b></div>
+                        <div>Numbers Taken: <span class="text-sky-400 font-mono">${s.totalNumbersTaken || 0}</span></div>
+                        <div>Success OTPs: <span class="text-emerald-400 font-mono">${s.totalSuccessOtps || 0}</span></div>
+                        <div>Balance: <span class="text-amber-400 font-mono">$${(s.balance || 0).toFixed(2)}</span></div>
+                    </div>
+                `;
+            } else {
+                box.innerHTML = `<span class="text-rose-400">ইউজার পাওয়া যায়নি!</span>`;
+            }
+        }
+
+        async function adminActionWithdraw(reqId, action) {
+            const req = pendingWithdraws[reqId];
+            if (!req) return;
+
+            if (action === 'Confirm') {
+                req.status = 'Confirmed';
+                await sendTelegramBotMessage(req.userId, `✅ <b>WITHDRAW CONFIRMED!</b>\n\nআপনার $${req.amount} উইথড্র রিকোয়েস্ট সফলভাবে কনফার্ম করা হয়েছে।`);
+                showToast("✅ উইথড্র কনফার্ম করা হয়েছে!");
+            } else {
+                req.status = 'Cancelled';
+                const uData = await fetchUserFromFirebase(req.userId);
+                if (uData) {
+                    if (!uData.stats) uData.stats = { totalNumbersTaken: 0, totalSuccessOtps: 0, balance: 0 };
+                    uData.stats.balance = (uData.stats.balance || 0) + req.amount;
+                    await fetch(`${FIREBASE_DB_URL}/users/${req.userId}.json`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(uData)
+                    });
+                }
+                await sendTelegramBotMessage(req.userId, `❌ <b>WITHDRAW CANCELLED!</b>\n\nআপনার $${req.amount} উইথড্র রিকোয়েস্ট বাতিল করা হয়েছে এবং ব্যালেন্স রিফান্ড করা হয়েছে।`);
+                showToast("❌ উইথড্র বাতিল ও ব্যালেন্স রিফান্ড করা হয়েছে!");
+            }
+
+            delete pendingWithdraws[reqId];
+            await syncWithdrawsToFirebase();
+            renderAdminPanelView();
+        }
+
+        // ==================== DETAILED DEVELOPER DOCS ====================
+        async function generateUserApiKey(isRegenerate = false) {
+            if (isRegenerate && !confirm("নতুন API Key জেনারেট করলে আগের Key কাজ করা বন্ধ হয়ে যাবে। নিশ্চিত?")) return;
             const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
             let randomPart = '';
-            for (let i = 0; i < 24; i++) {
-                randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
-            }
+            for (let i = 0; i < 24; i++) randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
             const newKey = `EBH_${currentUser.id.slice(-4)}_${randomPart}`;
             userCloudData.apiKey = newKey;
             await syncUserToFirebase();
@@ -628,88 +822,57 @@
             container.innerHTML = `
                 <div class="glass-panel rounded-3xl p-5 space-y-4 shadow-2xl border border-purple-500/40 pb-8">
                     <div class="flex justify-between items-center border-b border-slate-800 pb-3">
-                        <h3 class="text-xs font-extrabold text-purple-400 uppercase"><i class="fa-solid fa-terminal mr-1"></i> DEVELOPER API & DOCS</h3>
-                        <button onclick="renderUserProfileView()" class="text-[10px] c-blue px-3 py-1 rounded-lg text-white font-bold">Back to Profile</button>
+                        <h3 class="text-xs font-extrabold text-purple-400 uppercase"><i class="fa-solid fa-terminal mr-1"></i> DEVELOPER API & GUIDE</h3>
+                        <button onclick="renderUserProfileView()" class="text-[10px] c-blue px-3 py-1 rounded-lg text-white font-bold">Back</button>
                     </div>
 
-                    <!-- API Key Generator Box -->
                     <div class="bg-slate-900/95 border border-purple-500/30 rounded-2xl p-4 space-y-3">
                         <div class="flex justify-between items-center">
                             <span class="text-[11px] font-extrabold text-slate-300 uppercase"><i class="fa-solid fa-key text-amber-400 mr-1"></i> Your Personal API Key</span>
                             ${myApiKey ? `<span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-bold">Active</span>` : `<span class="text-[10px] bg-rose-500/20 text-rose-400 px-2 py-0.5 rounded-full font-bold">Not Generated</span>`}
                         </div>
-
                         ${myApiKey ? `
-                            <div onclick="copyText('${myApiKey}', 'API Key')" class="cursor-pointer bg-black/60 border border-slate-700 p-3 rounded-xl font-mono text-xs text-emerald-400 break-all text-center font-bold select-all active:scale-95 transition-all">
-                                ${myApiKey}
-                            </div>
+                            <div onclick="copyText('${myApiKey}', 'API Key')" class="cursor-pointer bg-black/60 border border-slate-700 p-3 rounded-xl font-mono text-xs text-emerald-400 break-all text-center font-bold select-all">${myApiKey}</div>
                             <div class="grid grid-cols-2 gap-2">
-                                <button onclick="copyText('${myApiKey}', 'API Key')" class="py-2.5 c-green rounded-xl text-[11px] font-extrabold text-white shadow active:scale-95 transition-all">
-                                    <i class="fa-solid fa-copy mr-1"></i> Copy Key
-                                </button>
-                                <button onclick="generateUserApiKey(true)" class="py-2.5 c-rose rounded-xl text-[11px] font-extrabold text-white shadow active:scale-95 transition-all">
-                                    <i class="fa-solid fa-rotate mr-1"></i> Regenerate
-                                </button>
+                                <button onclick="copyText('${myApiKey}', 'API Key')" class="py-2.5 c-green rounded-xl text-[11px] font-extrabold text-white shadow"><i class="fa-solid fa-copy mr-1"></i> Copy Key</button>
+                                <button onclick="generateUserApiKey(true)" class="py-2.5 c-rose rounded-xl text-[11px] font-extrabold text-white shadow"><i class="fa-solid fa-rotate mr-1"></i> Regenerate</button>
                             </div>
                         ` : `
-                            <p class="text-[11px] text-slate-400">বট বা থার্ড-পার্টি অ্যাপে কানেক্ট করতে নিচের বাটনে ক্লিক করে আপনার ইউনিক API Key তৈরি করুন:</p>
-                            <button onclick="generateUserApiKey(false)" class="w-full py-3 c-purple rounded-xl text-xs font-black text-white shadow-lg active:scale-95 transition-all">
-                                <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> GENERATE API KEY
-                            </button>
+                            <p class="text-[11px] text-slate-400">পাইথন বা থার্ড-পার্টি স্ক্রিপ্টের সাথে কানেক্ট করতে ইউনিক API Key তৈরি করুন:</p>
+                            <button onclick="generateUserApiKey(false)" class="w-full py-3 c-purple rounded-xl text-xs font-black text-white shadow-lg">GENERATE API KEY</button>
                         `}
                     </div>
 
-                    <!-- Developer Endpoints Documentation Box -->
+                    <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-3">
+                        <h4 class="text-xs font-extrabold text-sky-400 uppercase"><i class="fa-solid fa-circle-question mr-1"></i> কীভাবে API কাজ করবে? (Instructions)</h4>
+                        <ol class="text-[11px] text-slate-300 space-y-2 list-decimal pl-4 leading-relaxed">
+                            <li><b>API Key নিন:</b> প্রথমে ওপর থেকে আপনার পার্সোনাল API Key জেনারেট করে কপি করুন।</li>
+                            <li><b>এন্ডপয়েন্ট রিকোয়েস্ট:</b> আপনার পাইথন বট বা ব্রাউজার থেকে নিচের লিংকগুলোতে রিকোয়েস্ট পাঠিয়ে নাম্বার সংগ্রহ করতে পারবেন।</li>
+                            <li><b>অটো আর্নিং:</b> মিনি অ্যাপ কিংবা API এর মাধ্যমে নাম্বার নিয়ে সফল ওটিপি (Success OTP) পেলে আপনার ব্যালেন্সে তাৎক্ষণিক আর্নিং যোগ হবে।</li>
+                            <li><b>উইথড্র:</b> জমানো ব্যালেন্স প্রোফাইল থেকে বিকাশ/নগদ/বাইন্যান্সে উইথড্র রিকোয়েস্ট পাঠাতে পারবেন।</li>
+                        </ol>
+                    </div>
+
                     <div class="space-y-3">
-                        <h4 class="text-xs font-extrabold text-sky-400 uppercase border-b border-slate-800 pb-1.5"><i class="fa-solid fa-book mr-1"></i> API Endpoints & Usage</h4>
-
-                        <!-- Endpoint 1: Get Number -->
+                        <h4 class="text-xs font-extrabold text-amber-400 uppercase border-b border-slate-800 pb-1.5"><i class="fa-solid fa-code mr-1"></i> API Endpoints Reference</h4>
                         <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 space-y-2">
-                            <div class="flex justify-between items-center">
-                                <span class="text-[11px] font-extrabold text-emerald-400">1. GET NUMBER (নাম্বার নেওয়ার জন্য)</span>
-                                <span class="text-[9px] bg-blue-600 text-white px-2 py-0.5 rounded font-mono font-bold">GET</span>
-                            </div>
-                            <p class="text-[10px] text-slate-400">নির্দিষ্ট রেঞ্জ থেকে আপনার অ্যাকাউন্টে নতুন নাম্বার জেনারেট করতে নিচের লিংকটি কল করুন:</p>
-                            <div onclick="copyText('${getNumUrl}', 'Get Number URL')" class="cursor-pointer bg-black/70 border border-slate-800 p-2.5 rounded-xl font-mono text-[10px] text-sky-300 break-all leading-relaxed active:scale-95 transition-all">
-                                ${getNumUrl}
-                            </div>
-                            <div class="text-[9px] text-slate-400 font-mono bg-black/40 p-2 rounded-lg">
-                                Response: {"status":"success","data":{"number":"+123456...","range":"22899"}}
-                            </div>
+                            <div class="text-[11px] font-extrabold text-emerald-400">1. GET NUMBER ENDPOINT</div>
+                            <div onclick="copyText('${getNumUrl}', 'Get Number URL')" class="cursor-pointer bg-black/70 p-2.5 rounded-xl font-mono text-[10px] text-sky-300 break-all">${getNumUrl}</div>
                         </div>
-
-                        <!-- Endpoint 2: Check OTP -->
                         <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 space-y-2">
-                            <div class="flex justify-between items-center">
-                                <span class="text-[11px] font-extrabold text-amber-400">2. CHECK OTP (ওটিপি চেক করার জন্য)</span>
-                                <span class="text-[9px] bg-blue-600 text-white px-2 py-0.5 rounded font-mono font-bold">GET</span>
-                            </div>
-                            <p class="text-[10px] text-slate-400">নেওয়া নাম্বারে আসা সাকসেসফুল ওটিপি কোড চেক করতে এই এন্ডপয়েন্ট ব্যবহার করুন:</p>
-                            <div onclick="copyText('${checkOtpUrl}', 'Check OTP URL')" class="cursor-pointer bg-black/70 border border-slate-800 p-2.5 rounded-xl font-mono text-[10px] text-amber-300 break-all leading-relaxed active:scale-95 transition-all">
-                                ${checkOtpUrl}
-                            </div>
-                            <div class="text-[9px] text-slate-400 font-mono bg-black/40 p-2 rounded-lg">
-                                Response: {"status":"success","data":{"number":"+1234...","otp":"849201"}}
-                            </div>
+                            <div class="text-[11px] font-extrabold text-amber-400">2. CHECK OTP ENDPOINT</div>
+                            <div onclick="copyText('${checkOtpUrl}', 'Check OTP URL')" class="cursor-pointer bg-black/70 p-2.5 rounded-xl font-mono text-[10px] text-amber-300 break-all">${checkOtpUrl}</div>
                         </div>
-
-                        <!-- Endpoint 3: Live Console -->
                         <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 space-y-2">
-                            <div class="flex justify-between items-center">
-                                <span class="text-[11px] font-extrabold text-purple-400">3. LIVE CONSOLE (লাইভ ট্রাফিক চেক)</span>
-                                <span class="text-[9px] bg-blue-600 text-white px-2 py-0.5 rounded font-mono font-bold">GET</span>
-                            </div>
-                            <p class="text-[10px] text-slate-400">প্যানেলের চলমান লাইভ রেঞ্জ এবং ইনকামিং ট্রাফিক কনসোল দেখতে:</p>
-                            <div onclick="copyText('${consoleUrl}', 'Console URL')" class="cursor-pointer bg-black/70 border border-slate-800 p-2.5 rounded-xl font-mono text-[10px] text-purple-300 break-all leading-relaxed active:scale-95 transition-all">
-                                ${consoleUrl}
-                            </div>
+                            <div class="text-[11px] font-extrabold text-purple-400">3. LIVE CONSOLE</div>
+                            <div onclick="copyText('${consoleUrl}', 'Console URL')" class="cursor-pointer bg-black/70 p-2.5 rounded-xl font-mono text-[10px] text-purple-300 break-all">${consoleUrl}</div>
                         </div>
                     </div>
                 </div>
             `;
         }
 
-        // ==================== COUNTRY & NUMBER LOGIC ====================
+        // ==================== COMPLETE WORLD COUNTRIES & FLAGS ====================
         const WORLD_COUNTRIES = {
             "1": { flag: "🇺🇸", name: "USA/Canada", short: "US" }, "7": { flag: "🇷🇺", name: "Russia", short: "RU" },
             "20": { flag: "🇪🇬", name: "Egypt", short: "EG" }, "27": { flag: "🇿🇦", name: "South Africa", short: "ZA" },
@@ -821,18 +984,15 @@
                         servicesMap[sid].add(item.range);
                     });
 
-                    let html = `<div class="glass-panel rounded-2xl p-4 space-y-3 shadow-2xl pb-6">
-                                    <h3 class="text-xs font-extrabold text-sky-400 uppercase border-b border-slate-800 pb-2">SELECT SERVICE</h3>
-                                    <div class="grid grid-cols-2 gap-2.5">`;
+                    let html = `<div class="glass-panel rounded-2xl p-4 space-y-3 shadow-2xl pb-6"><h3 class="text-xs font-extrabold text-sky-400 uppercase border-b border-slate-800 pb-2">SELECT SERVICE</h3><div class="grid grid-cols-2 gap-2.5">`;
                     Object.keys(servicesMap).forEach((srv, idx) => {
-                        html += `<button onclick="loadCountriesForService('${srv}')" class="p-3.5 ${getRandomColor(idx)} active:scale-95 rounded-xl text-xs font-extrabold text-white text-center shadow-md">📱 ${srv}</button>`;
+                        let iconClass = getServiceIcon(srv);
+                        html += `<button onclick="loadCountriesForService('${srv}')" class="p-3.5 ${getRandomColor(idx)} active:scale-95 rounded-xl text-xs font-extrabold text-white text-center shadow-md flex items-center justify-center space-x-2"><i class="${iconClass} text-sm"></i><span>${srv}</span></button>`;
                     });
                     html += `</div></div>`;
                     container.innerHTML = html;
                 }
-            } catch(e) {
-                container.innerHTML = `<div class="glass-panel rounded-2xl p-4 text-center text-xs text-rose-400">API এরর!</div>`;
-            }
+            } catch(e) { container.innerHTML = `<div class="glass-panel rounded-2xl p-4 text-center text-xs text-rose-400">API এরর!</div>`; }
         }
 
         function loadCountriesForService(serviceName) {
@@ -850,19 +1010,10 @@
                 }
             });
 
-            let html = `<div class="glass-panel rounded-2xl p-4 space-y-3 shadow-2xl pb-6">
-                            <div class="flex items-center justify-between border-b border-slate-800 pb-2">
-                                <h3 class="text-xs font-extrabold text-amber-400 uppercase">${serviceName} - COUNTRIES</h3>
-                                <button onclick="loadServices()" class="text-[10px] font-bold text-white c-rose px-2.5 py-1 rounded-lg">Back</button>
-                            </div>
-                            <div class="space-y-2">`;
-
+            let html = `<div class="glass-panel rounded-2xl p-4 space-y-3 shadow-2xl pb-6"><div class="flex items-center justify-between border-b border-slate-800 pb-2"><h3 class="text-xs font-extrabold text-amber-400 uppercase">${serviceName} - COUNTRIES</h3><button onclick="loadServices()" class="text-[10px] font-bold text-white c-rose px-2.5 py-1 rounded-lg">Back</button></div><div class="space-y-2">`;
             Object.keys(countryRanges).forEach((cKey, idx) => {
                 let rng = countryRanges[cKey][0]; 
-                html += `<div onclick="buyTwoNumbers('${rng}', '${serviceName}')" class="p-3 ${getRandomColor(idx+1)} active:scale-95 rounded-xl flex items-center justify-between cursor-pointer shadow-md">
-                            <span class="text-xs font-extrabold text-white">${cKey}</span>
-                            <span class="text-[10px] font-mono text-white bg-black/30 px-2.5 py-1 rounded-lg font-bold">Get 2 Numbers</span>
-                         </div>`;
+                html += `<div onclick="buyTwoNumbers('${rng}', '${serviceName}')" class="p-3 ${getRandomColor(idx+1)} active:scale-95 rounded-xl flex items-center justify-between cursor-pointer shadow-md"><span class="text-xs font-extrabold text-white">${cKey}</span><span class="text-[10px] font-mono text-white bg-black/30 px-2.5 py-1 rounded-lg font-bold">Get 2 Numbers</span></div>`;
             });
             html += `</div></div>`;
             container.innerHTML = html;
@@ -875,28 +1026,18 @@
             localStorage.setItem('ebh_last_service', serviceTitle);
 
             const container = document.getElementById('screenContainer');
-            container.innerHTML = `<div class="glass-panel rounded-2xl p-6 text-center text-xs text-slate-300"><i class="fa-solid fa-spinner fa-spin text-xl text-emerald-400 mr-2"></i> নতুন নাম্বার জেনারেট হচ্ছে...</div>`;
+            container.innerHTML = `<div class="glass-panel rounded-2xl p-6 text-center text-xs text-slate-300"><i class="fa-solid fa-spinner fa-spin text-xl text-emerald-400 mr-2"></i> নাম্বার জেনারেট হচ্ছে...</div>`;
 
+            let limit = globalSettings.numberLimit || 2;
             let newFetchedNumbers = [];
-            for(let i=0; i<2; i++) {
+            for(let i=0; i<limit; i++) {
                 try {
-                    const response = await fetch(BUY_API, {
-                        method: "POST",
-                        headers: { "mauthapi": API_KEY, "Content-Type": "application/json" },
-                        body: JSON.stringify({ range: rangeId })
-                    });
+                    const response = await fetch(BUY_API, { method: "POST", headers: { "mauthapi": API_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ range: rangeId }) });
                     const resData = await response.json();
                     if(resData.meta && resData.meta.code === 200) {
                         const num = resData.data.full_number || resData.data.national_number;
                         if(num) {
-                            newFetchedNumbers.push({
-                                id: Date.now() + i,
-                                number: "+" + num.toString().replace("+",""),
-                                range: rangeId,
-                                service: serviceTitle,
-                                otp: null,
-                                notified: false
-                            });
+                            newFetchedNumbers.push({ id: Date.now() + i, number: "+" + num.toString().replace("+",""), range: rangeId, service: serviceTitle, otp: null, notified: false });
                         }
                     }
                 } catch(e) {}
@@ -912,48 +1053,42 @@
             }
         }
 
-        // ==================== ACTIVE NUMBERS VIEW (NEXT BUTTON BELOW NUMBERS) ====================
+        // ==================== ACTIVE NUMBERS VIEW (WITH PER-NUMBER RATE DISPLAY) ====================
         function renderActiveNumbersView() {
             const container = document.getElementById('screenContainer');
             const myNums = userCloudData.activeNumbers || [];
 
             if(myNums.length === 0) {
-                container.innerHTML = `
-                    <div class="glass-panel rounded-2xl p-6 text-center space-y-3 shadow-xl">
-                        <div class="w-12 h-12 c-blue text-white rounded-2xl mx-auto flex items-center justify-center text-xl shadow-lg">
-                            <i class="fa-solid fa-satellite-dish"></i>
-                        </div>
-                        <h1 class="text-base font-extrabold text-white">EBH SMS CLOUD PANEL</h1>
-                        <p class="text-xs text-slate-400">GET NUMBER এ ক্লিক করে নাম্বার নিন। প্রোফাইলে ক্লিক করে আপনার API Key ও হিস্ট্রি দেখতে পারবেন।</p>
-                    </div>`;
+                container.innerHTML = `<div class="glass-panel rounded-2xl p-6 text-center space-y-3 shadow-xl"><div class="w-12 h-12 c-blue text-white rounded-2xl mx-auto flex items-center justify-center text-xl shadow-lg"><i class="fa-solid fa-satellite-dish"></i></div><h1 class="text-base font-extrabold text-white">EBH SMS CLOUD PANEL</h1><p class="text-xs text-slate-400">GET NUMBER এ ক্লিক করে নাম্বার নিন।</p></div>`;
                 return;
             }
 
-            let html = `<div class="space-y-3 pb-6">
-                            <div class="flex justify-between items-center px-1">
-                                <h3 class="text-xs font-extrabold text-emerald-400 uppercase">📦 ACTIVE NUMBERS</h3>
-                                <button onclick="clearHistory()" class="text-[10px] c-rose px-2.5 py-1 rounded-lg text-white font-bold">Clear</button>
-                            </div>`;
-
+            let html = `<div class="space-y-3 pb-6"><div class="flex justify-between items-center px-1"><h3 class="text-xs font-extrabold text-emerald-400 uppercase">📦 ACTIVE NUMBERS</h3><button onclick="clearHistory()" class="text-[10px] c-rose px-2.5 py-1 rounded-lg text-white font-bold">Clear</button></div>`;
             myNums.forEach(item => {
                 let cInfo = getCountryInfo(item.number);
                 html += `
                     <div class="glass-panel rounded-2xl p-4 space-y-3 shadow-xl border-l-4 ${item.otp ? 'border-emerald-400' : 'border-sky-400'}">
                         <div class="flex justify-between items-center text-xs">
-                            <span class="font-extrabold text-white">${cInfo.flag} ${cInfo.name} - ${cInfo.short}</span>
-                            <span class="c-purple px-2.5 py-0.5 rounded-full text-[10px] text-white font-bold">${item.service}</span>
+                            <span class="font-extrabold text-white">${cInfo.flag} ${cInfo.name}</span>
+                            <div class="flex items-center space-x-1.5">
+                                <span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-mono font-bold">+$${globalSettings.otpRate}</span>
+                                <span class="c-purple px-2 py-0.5 rounded-full text-[10px] text-white font-bold">${item.service}</span>
+                            </div>
                         </div>
                         <div onclick="copyText('${item.number}', 'Number')" class="cursor-pointer active:scale-95 transition-all text-lg font-mono font-black text-white c-sky p-3.5 rounded-xl text-center shadow-md select-all">
                             📞 ${item.number}
                         </div>
                         ${item.otp ? `
-                            <div onclick="copyText('${item.otp}', 'OTP Code')" class="cursor-pointer active:scale-95 transition-all c-green p-3 rounded-xl text-center shadow-lg">
-                                <div class="text-[10px] text-emerald-100 uppercase font-bold">Tap to Copy OTP Code</div>
+                            <div onclick="copyText('${item.otp}', 'OTP Code')" class="cursor-pointer active:scale-95 transition-all c-green p-3 rounded-xl text-center shadow-lg relative">
+                                <div class="text-[10px] text-emerald-100 uppercase font-bold flex justify-between px-2">
+                                    <span>Tap to Copy OTP</span>
+                                    <span class="text-yellow-300 font-mono">+$${globalSettings.otpRate} Added</span>
+                                </div>
                                 <div class="text-2xl font-mono font-black text-white tracking-widest mt-0.5">🔑 ${item.otp}</div>
                             </div>
                         ` : `
                             <div class="bg-slate-900/90 border border-slate-800 p-2.5 rounded-xl text-center text-xs font-bold text-amber-400 animate-pulse">
-                                ⌛ Waiting for incoming OTP...
+                                ⌛ Waiting for incoming OTP... (Rate: +$${globalSettings.otpRate})
                             </div>
                         `}
                     </div>
@@ -961,91 +1096,37 @@
             });
 
             if (lastSelectedRange) {
-                html += `
-                    <div class="pt-1">
-                        <button onclick="buyTwoNumbers('${lastSelectedRange}', '${lastSelectedService}')" class="w-full py-4 c-next-btn active:scale-95 rounded-2xl font-black text-sm text-white transition-all flex items-center justify-center space-x-2">
-                            <i class="fa-solid fa-arrows-rotate text-base"></i>
-                            <span>NEXT NUMBERS (+2) &bull; [${lastSelectedRange}]</span>
-                        </button>
-                    </div>
-                `;
+                html += `<div class="pt-1"><button onclick="buyTwoNumbers('${lastSelectedRange}', '${lastSelectedService}')" class="w-full py-4 c-next-btn active:scale-95 rounded-2xl font-black text-sm text-white transition-all flex items-center justify-center space-x-2"><i class="fa-solid fa-arrows-rotate text-base"></i><span>NEXT NUMBERS (${globalSettings.numberLimit}) &bull; [${lastSelectedRange}]</span></button></div>`;
             }
-
             html += `</div>`;
             container.innerHTML = html;
             container.scrollTop = 0;
         }
 
-        // ==================== MY OTP CLOUD HISTORY VIEW ====================
         function renderMyOtpView() {
             const container = document.getElementById('screenContainer');
             const myOtps = userCloudData.successOtps || [];
 
             if(myOtps.length === 0) {
-                container.innerHTML = `
-                    <div class="glass-panel rounded-2xl p-6 text-center space-y-3 shadow-xl border border-amber-500/30">
-                        <div class="w-12 h-12 c-amber text-white rounded-2xl mx-auto flex items-center justify-center text-xl shadow-lg">
-                            <i class="fa-solid fa-key"></i>
-                        </div>
-                        <h1 class="text-base font-extrabold text-white">MY OTP CLOUD INBOX</h1>
-                        <p class="text-xs text-slate-400">এখনো কোনো নাম্বারে Successful OTP আসেনি। ওটিপি আসলে এখানে ক্লাউডে জমা হবে।</p>
-                    </div>`;
+                container.innerHTML = `<div class="glass-panel rounded-2xl p-6 text-center space-y-3 shadow-xl border border-amber-500/30"><div class="w-12 h-12 c-amber text-white rounded-2xl mx-auto flex items-center justify-center text-xl shadow-lg"><i class="fa-solid fa-key"></i></div><h1 class="text-base font-extrabold text-white">MY OTP INBOX</h1><p class="text-xs text-slate-400">কোনো সফল ওটিপি নেই।</p></div>`;
                 return;
             }
 
-            let html = `<div class="space-y-3 pb-6">
-                            <div class="flex justify-between items-center px-1">
-                                <h3 class="text-xs font-extrabold text-amber-400 uppercase"><i class="fa-solid fa-key mr-1"></i> CLOUD OTP HISTORY (${myOtps.length})</h3>
-                                <button onclick="renderActiveNumbersView()" class="text-[10px] c-blue px-2.5 py-1 rounded-lg text-white font-bold">Back to Numbers</button>
-                            </div>`;
-
+            let html = `<div class="space-y-3 pb-6"><div class="flex justify-between items-center px-1"><h3 class="text-xs font-extrabold text-amber-400 uppercase"><i class="fa-solid fa-key mr-1"></i> SUCCESSFUL OTPs (${myOtps.length})</h3><button onclick="renderActiveNumbersView()" class="text-[10px] c-blue px-2.5 py-1 rounded-lg text-white font-bold">Back</button></div>`;
             myOtps.slice().reverse().forEach((item, index) => {
                 let cInfo = getCountryInfo(item.number);
                 let serialNo = myOtps.length - index;
-                html += `
-                    <div class="glass-panel rounded-2xl p-4 space-y-3 shadow-xl border-l-4 border-amber-400 relative">
-                        <div class="flex justify-between items-center text-xs">
-                            <span class="font-black text-amber-300 bg-amber-950/60 px-2.5 py-0.5 rounded-full">#${serialNo} &bull; ${cInfo.flag} ${cInfo.name}</span>
-                            <div class="flex items-center space-x-2">
-                                <span class="text-[10px] text-slate-400 font-mono">${item.time || ''}</span>
-                                <button onclick="deleteOtpItem('${item.id}')" class="w-6 h-6 bg-rose-500/20 hover:bg-rose-500 text-rose-400 hover:text-white rounded-lg flex items-center justify-center text-xs transition-all" title="Delete">
-                                    <i class="fa-solid fa-trash"></i>
-                                </button>
-                            </div>
-                        </div>
-                        <div onclick="copyText('${item.number}', 'Number')" class="cursor-pointer active:scale-95 transition-all text-base font-mono font-extrabold text-white bg-slate-900 p-3 rounded-xl text-center border border-slate-800">
-                            📞 ${item.number} (${item.service})
-                        </div>
-                        <div onclick="copyText('${item.otp}', 'OTP Code')" class="cursor-pointer active:scale-95 transition-all c-green p-3 rounded-xl text-center shadow-lg">
-                            <div class="text-[10px] text-emerald-100 uppercase font-bold">Tap to Copy OTP</div>
-                            <div class="text-2xl font-mono font-black text-white tracking-widest mt-0.5">🔑 ${item.otp}</div>
-                        </div>
-                    </div>
-                `;
+                html += `<div class="glass-panel rounded-2xl p-4 space-y-3 shadow-xl border-l-4 border-amber-400 relative"><div class="flex justify-between items-center text-xs"><span class="font-black text-amber-300 bg-amber-950/60 px-2.5 py-0.5 rounded-full">#${serialNo} &bull; ${cInfo.flag} ${cInfo.name}</span><span class="text-[10px] text-slate-400 font-mono">${item.time || ''}</span></div><div onclick="copyText('${item.number}', 'Number')" class="cursor-pointer active:scale-95 transition-all text-base font-mono font-extrabold text-white bg-slate-900 p-3 rounded-xl text-center border border-slate-800">📞 ${item.number} (${item.service})</div><div onclick="copyText('${item.otp}', 'OTP Code')" class="cursor-pointer active:scale-95 transition-all c-green p-3 rounded-xl text-center shadow-lg"><div class="text-[10px] text-emerald-100 uppercase font-bold flex justify-between px-2"><span>Tap to Copy OTP</span><span class="text-yellow-300 font-mono">+$${globalSettings.otpRate}</span></div><div class="text-2xl font-mono font-black text-white tracking-widest mt-0.5">🔑 ${item.otp}</div></div></div>`;
             });
             html += `</div>`;
             container.innerHTML = html;
         }
 
-        async function deleteOtpItem(itemId) {
-            if(confirm("আপনি কি নিশ্চিতভাবে এই ওটিপি হিস্ট্রি থেকে ডিলিট করতে চান?")) {
-                userCloudData.successOtps = (userCloudData.successOtps || []).filter(i => i.id !== itemId);
-                updateOtpBadge();
-                await syncUserToFirebase();
-                renderMyOtpView();
-                showToast("🗑️ ক্লাউড থেকে ডিলিট করা হয়েছে!");
-            }
-        }
-
         async function clearHistory() {
-            if(confirm("অ্যাক্টিভ নাম্বারগুলো মুছে ফেলতে চান?")) {
-                userCloudData.activeNumbers = [];
-                await syncUserToFirebase();
-                renderActiveNumbersView();
-            }
+            if(confirm("অ্যাক্টিভ নাম্বারগুলো মুছে ফেলতে চান?")) { userCloudData.activeNumbers = []; await syncUserToFirebase(); renderActiveNumbersView(); }
         }
 
-        // ==================== SUPER FAST REAL-TIME OTP POLLING (1.5s) ====================
+        // ==================== REAL-TIME OTP POLLING (1.5s) & EARNING ====================
         async function pollOtps() {
             if (!currentUser) return;
             try {
@@ -1055,12 +1136,8 @@
                 ]);
 
                 let allSms = [];
-                if (statusRes.meta && statusRes.meta.code === 200 && statusRes.data && statusRes.data.otps) {
-                    allSms = allSms.concat(statusRes.data.otps);
-                }
-                if (consoleRes.meta && consoleRes.meta.code === 200 && consoleRes.data && consoleRes.data.hits) {
-                    allSms = allSms.concat(consoleRes.data.hits);
-                }
+                if (statusRes.data && statusRes.data.otps) allSms = allSms.concat(statusRes.data.otps);
+                if (consoleRes.data && consoleRes.data.hits) allSms = allSms.concat(consoleRes.data.hits);
 
                 let activeNums = userCloudData.activeNumbers || [];
                 let successOtps = userCloudData.successOtps || [];
@@ -1082,22 +1159,11 @@
                                 const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                                 const alreadyExists = successOtps.some(h => h.number === act.number && h.otp === code);
                                 if (!alreadyExists) {
-                                    successOtps.push({
-                                        id: 'otp_' + Date.now() + Math.floor(Math.random()*1000),
-                                        number: act.number,
-                                        service: act.service,
-                                        range: act.range,
-                                        otp: code,
-                                        time: nowTime
-                                    });
+                                    successOtps.push({ id: 'otp_' + Date.now(), number: act.number, service: act.service, range: act.range, otp: code, time: nowTime });
                                     userCloudData.successOtps = successOtps;
                                     userCloudData.stats.totalSuccessOtps = (userCloudData.stats.totalSuccessOtps || 0) + 1;
+                                    userCloudData.stats.balance = (userCloudData.stats.balance || 0) + globalSettings.otpRate;
                                     updateOtpBadge();
-                                }
-
-                                if (!act.notified) {
-                                    act.notified = true;
-                                    await forwardOtpToTelegram(act, code);
                                 }
                             }
                         }
@@ -1114,16 +1180,7 @@
 
         function openCustomRange() {
             const container = document.getElementById('screenContainer');
-            container.innerHTML = `
-                <div class="glass-panel rounded-2xl p-5 space-y-4 shadow-2xl border border-purple-500/40 pb-6">
-                    <h3 class="text-xs font-extrabold text-purple-400 uppercase border-b border-slate-800 pb-2"><i class="fa-solid fa-keyboard mr-1"></i> CUSTOM RANGE</h3>
-                    <div class="space-y-2">
-                        <label class="text-xs text-slate-300 block">Enter Range ID:</label>
-                        <input type="text" id="customRngInput" placeholder="22899" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-white uppercase font-mono focus:outline-none focus:border-purple-500">
-                    </div>
-                    <button onclick="buyCustomRange()" class="w-full py-3 c-purple active:scale-95 rounded-xl font-extrabold text-xs text-white shadow-lg transition-all">Generate 2 Numbers</button>
-                </div>
-            `;
+            container.innerHTML = `<div class="glass-panel rounded-2xl p-5 space-y-4 shadow-2xl border border-purple-500/40 pb-6"><h3 class="text-xs font-extrabold text-purple-400 uppercase border-b border-slate-800 pb-2"><i class="fa-solid fa-keyboard mr-1"></i> CUSTOM RANGE</h3><div class="space-y-2"><label class="text-xs text-slate-300 block">Enter Range ID:</label><input type="text" id="customRngInput" placeholder="22899" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-white uppercase font-mono"></div><button onclick="buyCustomRange()" class="w-full py-3 c-purple active:scale-95 rounded-xl font-extrabold text-xs text-white shadow-lg">Generate Numbers</button></div>`;
         }
 
         async function buyCustomRange() {
@@ -1134,19 +1191,14 @@
 
         async function loadLiveTraffic() {
             const container = document.getElementById('screenContainer');
-            container.innerHTML = `<div class="glass-panel rounded-2xl p-6 text-center text-xs text-slate-300"><i class="fa-solid fa-spinner fa-spin text-emerald-400 mr-2"></i> লাইভ ট্রাফিক কনসোল লোড হচ্ছে...</div>`;
+            container.innerHTML = `<div class="glass-panel rounded-2xl p-6 text-center text-xs text-slate-300"><i class="fa-solid fa-spinner fa-spin text-emerald-400 mr-2"></i> লোড হচ্ছে...</div>`;
 
             try {
                 const response = await fetch(CONSOLE_API, { headers: { "mauthapi": API_KEY, "Accept": "application/json" } });
                 const result = await response.json();
                 if(result.meta && result.meta.code === 200) {
                     let hits = result.data.hits || [];
-                    let html = `<div class="glass-panel rounded-2xl p-4 space-y-2.5 shadow-2xl border border-emerald-500/30 pb-6">
-                                    <div class="flex justify-between items-center border-b border-slate-800 pb-2">
-                                        <h3 class="text-xs font-extrabold text-emerald-400 uppercase"><i class="fa-solid fa-satellite-dish mr-1"></i> LIVE TRAFFIC CONSOLE</h3>
-                                        <button onclick="loadLiveTraffic()" class="text-[10px] c-sky px-2 py-0.5 rounded font-bold text-white">Refresh</button>
-                                    </div>
-                                    <div class="space-y-2.5">`;
+                    let html = `<div class="glass-panel rounded-2xl p-4 space-y-2.5 shadow-2xl border border-emerald-500/30 pb-6"><div class="flex justify-between items-center border-b border-slate-800 pb-2"><h3 class="text-xs font-extrabold text-emerald-400 uppercase"><i class="fa-solid fa-satellite-dish mr-1"></i> LIVE TRAFFIC</h3><button onclick="loadLiveTraffic()" class="text-[10px] c-sky px-2 py-0.5 rounded font-bold text-white">Refresh</button></div><div class="space-y-2.5">`;
                     
                     hits.slice(-25).reverse().forEach(hit => {
                         let cInfo = getCountryInfo(hit.range);
@@ -1154,32 +1206,15 @@
                         let rawRange = hit.range || "N/A";
                         let rawMessage = hit.message || "";
                         
-                        html += `<div class="p-3 bg-slate-900/90 border border-slate-800 rounded-xl space-y-2">
-                                    <div class="flex justify-between items-center font-bold text-white">
-                                        <span>${cInfo.flag} ${cInfo.name} (${cInfo.short})</span>
-                                        <span class="c-blue text-white font-mono text-[10px] px-2 py-0.5 rounded-full font-extrabold">${serviceName}</span>
-                                    </div>
-                                    <div class="flex justify-between items-center bg-black/40 p-2 rounded border border-slate-800/80">
-                                        <span class="text-amber-400 font-mono text-[11px]">Range: <b>${rawRange}</b></span>
-                                        <button onclick="buyTwoNumbers('${rawRange}', '${serviceName}')" class="px-2.5 py-1 c-green text-white text-[10px] font-extrabold rounded-lg shadow active:scale-95 transition-all">
-                                            Get Number <i class="fa-solid fa-arrow-right ml-1"></i>
-                                        </button>
-                                    </div>
-                                    <div class="text-[11px] text-emerald-300 font-mono bg-black/50 p-2.5 rounded-lg border border-slate-800 break-words leading-relaxed">
-                                        ${rawMessage}
-                                    </div>
-                                 </div>`;
+                        html += `<div class="p-3 bg-slate-900/90 border border-slate-800 rounded-xl space-y-2"><div class="flex justify-between items-center font-bold text-white"><span>${cInfo.flag} ${cInfo.name} (${cInfo.short})</span><span class="c-blue text-white font-mono text-[10px] px-2 py-0.5 rounded-full font-extrabold">${serviceName}</span></div><div class="flex justify-between items-center bg-black/40 p-2 rounded border border-slate-800/80"><span class="text-amber-400 font-mono text-[11px]">Range: <b>${rawRange}</b></span><button onclick="buyTwoNumbers('${rawRange}', '${serviceName}')" class="px-2.5 py-1 c-green text-white text-[10px] font-extrabold rounded-lg shadow">Get Number</button></div><div class="text-[11px] text-emerald-300 font-mono bg-black/50 p-2.5 rounded-lg border border-slate-800 break-words leading-relaxed">${rawMessage}</div></div>`;
                     });
                     html += `</div></div>`;
                     container.innerHTML = html;
                 }
-            } catch(e) {
-                container.innerHTML = `<div class="glass-panel rounded-2xl p-4 text-center text-xs text-rose-400">লাইভ ট্রাফিক লোড করতে সমস্যা হয়েছে!</div>`;
-            }
+            } catch(e) { container.innerHTML = `<div class="glass-panel rounded-2xl p-4 text-center text-xs text-rose-400">লোড করতে সমস্যা হয়েছে!</div>`; }
         }
 
-        // Super fast polling interval set to 1.5 seconds
         setInterval(pollOtps, 1500);
     </script>
 </body>
-  </html>
+</html>
