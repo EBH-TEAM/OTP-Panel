@@ -44,16 +44,16 @@
                 <div class="w-14 h-14 c-blue rounded-2xl mx-auto flex items-center justify-center text-2xl text-white shadow-lg">
                     <i class="fa-brands fa-telegram"></i>
                 </div>
-                <h2 class="text-lg font-extrabold text-white">TELEGRAM CLOUD LOGIN</h2>
-                <p class="text-xs text-slate-400">যেকোনো ব্রাউজারে আপনার হিস্ট্রি ও API সিংক করতে টেলিগ্রাম Chat ID দিন।</p>
+                <h2 class="text-lg font-extrabold text-white">BROWSER LOGIN RESTRICTION</h2>
+                <p class="text-xs text-slate-400">ব্রাউজারে ঢুকতে হলে আগে টেলিগ্রাম বট থেকে মিনি অ্যাপ ওপেন করে ডাটা সেভ থাকতে হবে। Chat ID দিন:</p>
             </div>
             <div id="loginStep1" class="space-y-3">
                 <div>
                     <label class="text-[11px] font-bold text-slate-300 block mb-1">Telegram Chat ID:</label>
                     <input type="number" id="loginChatId" placeholder="e.g. 6140196943" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-white font-mono focus:outline-none focus:border-blue-500">
                 </div>
-                <button onclick="sendLoginOtp()" id="sendCodeBtn" class="w-full py-3 c-blue active:scale-95 rounded-xl font-extrabold text-xs text-white transition-all">
-                    SEND VERIFICATION CODE
+                <button onclick="checkAndSendLoginOtp()" id="sendCodeBtn" class="w-full py-3 c-blue active:scale-95 rounded-xl font-extrabold text-xs text-white transition-all">
+                    CHECK & SEND OTP
                 </button>
             </div>
             <div id="loginStep2" class="space-y-3 hidden">
@@ -62,7 +62,7 @@
                     <input type="number" id="loginOtpInput" placeholder="123456" class="w-full bg-slate-900 border border-emerald-600 rounded-xl p-3 text-center text-lg tracking-widest text-white font-mono focus:outline-none">
                 </div>
                 <button onclick="verifyLoginOtp()" class="w-full py-3 c-green active:scale-95 rounded-xl font-extrabold text-xs text-white transition-all">
-                    VERIFY & SYNC CLOUD
+                    VERIFY & LOGIN
                 </button>
                 <button onclick="resetLoginStep()" class="w-full py-2 text-[11px] text-slate-400 hover:text-white">Change Chat ID</button>
             </div>
@@ -136,6 +136,7 @@
         let currentUser = null;
         let generatedLoginOtp = null;
         let pendingChatId = null;
+        let verifiedUserData = null; // Stored user profile retrieved from DB for browser login check
 
         let userCloudData = {
             profile: { name: "User", username: "", photo: "", joinedAt: "" },
@@ -342,12 +343,13 @@
 
             await fetchGlobalSettings();
             const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+            
             if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
                 tg.ready();
                 tg.expand();
                 const u = tg.initDataUnsafe.user;
                 let fullName = `${u.first_name || ''} ${u.last_name || ''}`.trim() || "Telegram User";
-                let uname = u.username ? `@${u.username}` : "No Username";
+                let uname = u.username ? `@${u.username}` : "@NoUsername";
                 let userPhoto = u.photo_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(fullName)}&background=2563eb&color=fff`;
                 
                 currentUser = {
@@ -362,7 +364,19 @@
                 const savedSession = localStorage.getItem('ebh_web_user');
                 if (savedSession) {
                     currentUser = JSON.parse(savedSession);
-                    await initializeCloudSession();
+                    // Verify from database if this user really registered via Mini App before
+                    const existingCloud = await fetchUserFromFirebase(currentUser.id);
+                    if (existingCloud && existingCloud.profile && existingCloud.profile.name && !existingCloud.profile.name.includes("User (")) {
+                        currentUser.name = existingCloud.profile.name;
+                        currentUser.username = existingCloud.profile.username || currentUser.username;
+                        currentUser.photo = existingCloud.profile.photo || currentUser.photo;
+                        await initializeCloudSession();
+                    } else {
+                        // Not registered via Mini App, clear session & show error restriction
+                        localStorage.removeItem('ebh_web_user');
+                        document.getElementById('loginScreen').classList.remove('hidden');
+                        showToast("⚠️ আগে টেলিগ্রাম বট থেকে মিনি অ্যাপ ওপেন করুন!");
+                    }
                 } else {
                     document.getElementById('loginScreen').classList.remove('hidden');
                 }
@@ -384,13 +398,28 @@
                     activeNumbers: existingCloud.activeNumbers || [],
                     successOtps: existingCloud.successOtps || []
                 };
-                userCloudData.profile.name = currentUser.name;
-                userCloudData.profile.username = currentUser.username;
+
+                // If opened via Mini App, update/preserve the real name and username
+                if (currentUser.isMiniApp && currentUser.name && !currentUser.name.includes("User (")) {
+                    userCloudData.profile.name = currentUser.name;
+                    userCloudData.profile.username = currentUser.username;
+                } else if (existingCloud.profile && existingCloud.profile.name) {
+                    // Restore from database for browser session
+                    currentUser.name = existingCloud.profile.name;
+                    currentUser.username = existingCloud.profile.username;
+                }
+
                 userCloudData.profile.photo = fetchedPhoto;
                 await syncUserToFirebase();
             } else {
+                // If not in database and trying to login via browser, block it!
+                if (!currentUser.isMiniApp) {
+                    document.getElementById('loginScreen').classList.remove('hidden');
+                    showToast("⚠️ আগে টেলিগ্রাম মিনি অ্যাপ ওপেন করুন!");
+                    return;
+                }
                 userCloudData = {
-                    profile: { name: currentUser.name, username: currentUser.username || "Web User", photo: fetchedPhoto, joinedAt: new Date().toLocaleDateString() },
+                    profile: { name: currentUser.name, username: currentUser.username || "@TelegramUser", photo: fetchedPhoto, joinedAt: new Date().toLocaleDateString() },
                     stats: { totalNumbersTaken: 0, totalSuccessOtps: 0, balance: 0.00 },
                     apiKey: "",
                     activeNumbers: [],
@@ -411,6 +440,7 @@
         async function syncUserToFirebase() {
             if (!currentUser || !currentUser.id) return;
             try {
+                // Only write/update name if it's a valid Mini App session or already exists with real name
                 await fetch(`${FIREBASE_DB_URL}/users/${currentUser.id}.json`, {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
@@ -450,34 +480,57 @@
             } catch (e) { return { ok: false }; }
         }
 
-        async function sendLoginOtp() {
+        // ==================== BROWSER LOGIN CHECK & RESTRICTION ====================
+        async function checkAndSendLoginOtp() {
             const chatIdInput = document.getElementById('loginChatId').value.trim();
             if (!chatIdInput) { showToast("⚠️ সঠিক Telegram Chat ID দিন!"); return; }
 
+            showToast("🔍 ডাটাবেজ চেক করা হচ্ছে...");
+            const existingData = await fetchUserFromFirebase(chatIdInput);
+
+            // Check if user has previously registered via Telegram Mini App (must have valid name, not generic/blank)
+            if (!existingData || !existingData.profile || !existingData.profile.name || existingData.profile.name.includes("User (") || existingData.profile.name === "User") {
+                alert("❌ এক্সেস ডিনায়ার্ড!\n\nআপনি আগে কখনো টেলিগ্রাম বট থেকে মিনি অ্যাপ ওপেন করেননি। ব্রাউজার ব্যবহার করতে হলে প্রথমে অবশ্যই টেলিগ্রাম বট থেকে মিনি অ্যাপ ওপেন করে রেজিস্ট্রেশন করতে হবে।");
+                return;
+            }
+
+            // Save verified user profile for later OTP verification
+            verifiedUserData = existingData;
+
             const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-            const result = await sendTelegramBotMessage(chatIdInput, `🔐 <b>LOGIN OTP</b>\n\n<blockquote>🔑 Code: <code>${otpCode}</code></blockquote>`);
+            const result = await sendTelegramBotMessage(chatIdInput, `🔐 <b>BROWSER LOGIN OTP</b>\n\n<blockquote>🔑 Code: <code>${otpCode}</code></blockquote>`);
 
             if (result && result.ok) {
                 generatedLoginOtp = otpCode;
                 pendingChatId = chatIdInput;
                 document.getElementById('loginStep1').classList.add('hidden');
                 document.getElementById('loginStep2').classList.remove('hidden');
-                showToast("✅ কোড পাঠানো হয়েছে!");
+                showToast("✅ টেলিগ্রামে ওটিপি কোড পাঠানো হয়েছে!");
             } else {
                 showToast("❌ কোড পাঠানো যায়নি! বট /start করা আছে কিনা চেক করুন।");
             }
         }
 
         async function verifyLoginOtp() {
-            if (document.getElementById('loginOtpInput').value.trim() === generatedLoginOtp && pendingChatId) {
-                let fetchedPhoto = `https://ui-avatars.com/api/?name=${pendingChatId}&background=10b981&color=fff`;
-                const tgPic = await fetchTelegramProfilePhoto(pendingChatId);
-                if (tgPic) fetchedPhoto = tgPic;
+            const enteredOtp = document.getElementById('loginOtpInput').value.trim();
+            if (enteredOtp === generatedLoginOtp && pendingChatId) {
+                let p = verifiedUserData.profile || {};
+                let fetchedPhoto = p.photo || `https://ui-avatars.com/api/?name=${pendingChatId}&background=10b981&color=fff`;
 
-                currentUser = { id: pendingChatId, name: `User (${pendingChatId})`, username: "@WebUser", photo: fetchedPhoto, isMiniApp: false };
+                currentUser = { 
+                    id: pendingChatId, 
+                    name: p.name, 
+                    username: p.username || `@User_${pendingChatId}`, 
+                    photo: fetchedPhoto, 
+                    isMiniApp: false 
+                };
+
                 localStorage.setItem('ebh_web_user', JSON.stringify(currentUser));
                 await initializeCloudSession();
-            } else { showToast("❌ ভুল ওটিপি কোড!"); }
+                showToast("✅ সফলভাবে লগইন হয়েছে!");
+            } else { 
+                showToast("❌ ভুল ওটিপি কোড!"); 
+            }
         }
 
         function resetLoginStep() {
@@ -501,10 +554,9 @@
             showToast(`✅ ${label} Copied!`);
         }
 
-        // ==================== USER PROFILE & WALLET (SHOWING NAME & USERNAME) ====================
+        // ==================== USER PROFILE & WALLET ====================
         function renderUserProfileView() {
             const container = document.getElementById('screenContainer');
-            const p = userCloudData.profile || {};
             const s = userCloudData.stats || { totalNumbersTaken: 0, totalSuccessOtps: 0, balance: 0.00 };
             const isAdmin = currentUser.id === ADMIN_CHAT_ID;
             const currentOtpCount = (userCloudData.successOtps || []).length;
